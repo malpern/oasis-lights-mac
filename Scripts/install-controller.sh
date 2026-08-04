@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-source_app="$project_root/Build/Applications/Oasis Lights.app"
+source_app="${OASIS_CONTROLLER_SOURCE_APP:-$project_root/Build/Applications/Oasis Lights.app}"
 
 if [[ ! -d "$source_app" ]]; then
   "$project_root/Scripts/build-apps.sh"

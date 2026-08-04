@@ -85,6 +85,15 @@ Run the protocol regression suite:
 python3 -m unittest discover -s Research -p 'test_*.py'
 ```
 
+Install the built controller for the current user, or point the installer at an
+already verified release app:
+
+```sh
+Scripts/install-controller.sh --local
+OASIS_CONTROLLER_SOURCE_APP="/path/to/Oasis Lights.app" \
+  Scripts/install-controller.sh --remote user@host
+```
+
 The build generates each app's `.icns` from the original masters in
 `Assets/Generated`. `Oasis Lights.app` embeds Sparkle 2.9.4 and checks the signed
 feed at `https://malpern.github.io/oasis-lights-mac/appcast.xml`. The bridge is

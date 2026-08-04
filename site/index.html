@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Oasis Lights — An Unofficial Technical Field Guide</title>
-  <meta name="description" content="A multi-part field guide to Oasis Ambient 2 lights: system architecture, Bluetooth Mesh protocol, color, automations, Mac control, and Home Assistant.">
+  <meta name="description" content="A multi-part field guide to Oasis Ambient 2 lights: hardware, firmware, Bluetooth Mesh protocol, automations, public engineering trail, Mac control, and Home Assistant.">
   <meta name="theme-color" content="#070b10">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Oasis Lights — Unlocked">
@@ -12,7 +12,7 @@
   <meta property="og:url" content="https://malpern.github.io/oasis-lights-mac/">
   <meta property="og:image" content="https://malpern.github.io/oasis-lights-mac/assets/og.png">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="css/style.css?v=2">
+  <link rel="stylesheet" href="css/style.css?v=3">
   <script src="js/main.js?v=2" defer></script>
 </head>
 <body>
@@ -20,6 +20,7 @@
   <nav class="nav" aria-label="Technical field guide">
     <a class="nav-logo" href="index.html"><span class="mark" aria-hidden="true"></span> Oasis Lights</a>
     <ul class="nav-links">
+      <li><a href="pages/hardware.html">Hardware</a></li>
       <li><a href="pages/system.html">System</a></li>
       <li><a href="pages/protocol.html">Protocol</a></li>
       <li><a href="pages/colors.html">Colors</a></li>
@@ -27,6 +28,7 @@
       <li><a href="pages/mac-app.html">Mac App</a></li>
       <li><a href="pages/home-assistant.html">Home Assistant</a></li>
       <li><a href="pages/confidence.html">Confidence</a></li>
+      <li><a href="pages/people.html">People</a></li>
     </ul>
   </nav>
 
@@ -77,9 +79,14 @@
 
     <section class="section">
       <div class="container container--wide fade-in">
-        <p class="section-label">Seven deep dives</p>
+        <p class="section-label">Nine deep dives</p>
         <h2>Explore the whole stack.</h2>
         <div class="explore-grid">
+          <a class="explore-card featured" href="pages/hardware.html">
+            <span class="number">00</span><h3>Hardware</h3>
+            <p>FCC internals, ESP32-C6, the five-channel LED driver, secure boot, local storage, manufacturing variants, and what the silicon does—and does not—say about Matter.</p>
+            <span class="card-link">Open the light →</span>
+          </a>
           <a class="explore-card featured" href="pages/system.html">
             <span class="number">01</span><h3>System</h3>
             <p>How the Oasis app, BLE Mesh, ESP local control, RainMaker, rooms, and the lights fit together.</p>
@@ -114,6 +121,11 @@
             <span class="number">07</span><h3>Confidence</h3>
             <p>A candid ledger of what is live-validated, statically decoded, inferred, protected, or still unknown. No mystery bytes presented as fact.</p>
             <span class="card-link">Inspect the evidence →</span>
+          </a>
+          <a class="explore-card featured" href="pages/people.html">
+            <span class="number">08</span><h3>People</h3>
+            <p>The public trail behind Oasis: product leadership, FCC responsibility, an Espressif provisioning fork, current R&amp;D leadership, and the gaps that remain in public attribution.</p>
+            <span class="card-link">Follow the public trail →</span>
           </a>
         </div>
       </div>

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oasis Lights — An Unofficial Technical Field Guide</title>
+  <meta name="description" content="A multi-part field guide to Oasis Ambient 2 lights: system architecture, Bluetooth Mesh protocol, color, automations, Mac control, and Home Assistant.">
+  <meta name="theme-color" content="#070b10">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Oasis Lights — Unlocked">
+  <meta property="og:description" content="An unofficial open-source field guide to Oasis Ambient 2 lights.">
+  <meta property="og:url" content="https://malpern.github.io/oasis-lights-mac/">
+  <meta property="og:image" content="https://malpern.github.io/oasis-lights-mac/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="css/style.css?v=2">
+  <script src="js/main.js?v=2" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="nav" aria-label="Technical field guide">
+    <a class="nav-logo" href="index.html"><span class="mark" aria-hidden="true"></span> Oasis Lights</a>
+    <ul class="nav-links">
+      <li><a href="pages/system.html">System</a></li>
+      <li><a href="pages/protocol.html">Protocol</a></li>
+      <li><a href="pages/colors.html">Colors</a></li>
+      <li><a href="pages/automations.html">Automations</a></li>
+      <li><a href="pages/mac-app.html">Mac App</a></li>
+      <li><a href="pages/home-assistant.html">Home Assistant</a></li>
+      <li><a href="pages/confidence.html">Confidence</a></li>
+    </ul>
+  </nav>
+
+  <main class="page" id="main">
+    <section class="hero hero--home container container--wide">
+      <p class="section-label">An unofficial open-source field guide</p>
+      <h1>What lives<br>inside the <em>light?</em></h1>
+      <p class="subtitle">Oasis Ambient 2 looks effortless. Underneath is a layered system of Bluetooth Mesh, RainMaker cloud state, room groups, and device-resident schedules. We mapped it, built a native Mac controller, and documented where the evidence ends.</p>
+      <div class="hero-meta">
+        <span>Ambient 2</span><span>Bluetooth Mesh</span><span>Native macOS</span><span>Home Assistant</span>
+      </div>
+      <figure class="official-hero-media">
+        <a href="https://heyoasis.com/en/shop/ambients" aria-label="See Oasis Ambients on the official Oasis website">
+          <img src="assets/oasis-official-ambients-1.webp" alt="An Oasis Ambient light glowing warmly on a stack of books">
+        </a>
+        <figcaption>Official Oasis product photography · <a href="https://heyoasis.com/en/shop/ambients">View Ambients at heyoasis.com ↗</a></figcaption>
+      </figure>
+    </section>
+
+    <section class="section product-intro">
+      <div class="container container--wide fade-in">
+        <p class="section-label">The actual hardware</p>
+        <h2>Small spheres. Room-scale light.</h2>
+        <p class="lead">Oasis Ambients are wall-facing, indirect lights. Their sculptural form is central to the product—and to recognizing whether this field guide covers the lights you own.</p>
+        <div class="product-gallery">
+          <figure><a href="https://heyoasis.com/en/shop/ambients"><img src="assets/oasis-official-ambients-3.webp" alt="A hand reaching toward an Oasis Ambient light on a side table"></a><figcaption>Touch-sized Ambient · <a href="https://heyoasis.com/en/shop/ambients">Source: Oasis ↗</a></figcaption></figure>
+          <figure><a href="https://heyoasis.com/en/shop/ambients"><img src="assets/oasis-official-ambients-2.webp" alt="An Oasis Ambient light illuminating a corner beside a plant"></a><figcaption>Indirect corner light · <a href="https://heyoasis.com/en/shop/ambients">Source: Oasis ↗</a></figcaption></figure>
+          <figure><a href="https://heyoasis.com/en/shop/ambients"><img src="assets/oasis-official-ambients-1.webp" alt="An Oasis Ambient light glowing on a stack of design books"></a><figcaption>Ambient on a shelf · <a href="https://heyoasis.com/en/shop/ambients">Source: Oasis ↗</a></figcaption></figure>
+        </div>
+        <p class="provenance-note">Product images are reproduced from the <a href="https://heyoasis.com/en/shop/ambients">official Oasis Ambients page</a> for product identification and provenance. Oasis retains ownership of its photography and trademarks.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container container--wide fade-in">
+        <p class="section-label">The investigation</p>
+        <h2>A product, examined in layers.</h2>
+        <p class="lead">The official app still works. This project adds a compatible control surface and a public record of what we learned—without resetting, removing, or reprovisioning the lights.</p>
+        <div class="stats" aria-label="Project facts">
+          <div class="stat"><div class="stat-value">2</div><div class="stat-label">Lights validated</div></div>
+          <div class="stat"><div class="stat-value">30</div><div class="stat-label">Protocol tests</div></div>
+          <div class="stat"><div class="stat-value">15</div><div class="stat-label">Command families</div></div>
+          <div class="stat"><div class="stat-value">6</div><div class="stat-label">Official whites</div></div>
+          <div class="stat"><div class="stat-value">0</div><div class="stat-label">Resets needed</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container container--wide fade-in">
+        <p class="section-label">Seven deep dives</p>
+        <h2>Explore the whole stack.</h2>
+        <div class="explore-grid">
+          <a class="explore-card featured" href="pages/system.html">
+            <span class="number">01</span><h3>System</h3>
+            <p>How the Oasis app, BLE Mesh, ESP local control, RainMaker, rooms, and the lights fit together.</p>
+            <span class="card-link">Open the system map →</span>
+          </a>
+          <a class="explore-card" href="pages/protocol.html">
+            <span class="number">02</span><h3>Protocol</h3>
+            <p>The vendor model, services, opcodes, byte layouts, and the commands deliberately left out.</p>
+            <span class="card-link">Read the command map →</span>
+          </a>
+          <a class="explore-card" href="pages/colors.html">
+            <span class="number">03</span><h3>Colors</h3>
+            <p>Six official whites, RGB mode, the native picker, and the effect controls still under investigation.</p>
+            <span class="card-link">Enter the light lab →</span>
+          </a>
+          <a class="explore-card" href="pages/automations.html">
+            <span class="number">04</span><h3>Automations</h3>
+            <p>The device-resident schedule schema behind Light Cycle, sunrise, sunset, fades, and room programs.</p>
+            <span class="card-link">Decode the schedule →</span>
+          </a>
+          <a class="explore-card" href="pages/mac-app.html">
+            <span class="number">05</span><h3>Mac App</h3>
+            <p>A visible SwiftUI controller paired with a removable, automatically launched headless bridge.</p>
+            <span class="card-link">See the Mac design →</span>
+          </a>
+          <a class="explore-card" href="pages/home-assistant.html">
+            <span class="number">06</span><h3>Home Assistant</h3>
+            <p>Why Matter was a dead end on these units and how the bridge exposes a safe local control surface.</p>
+            <span class="card-link">Follow the integration →</span>
+          </a>
+          <a class="explore-card featured" href="pages/confidence.html">
+            <span class="number">07</span><h3>Confidence</h3>
+            <p>A candid ledger of what is live-validated, statically decoded, inferred, protected, or still unknown. No mystery bytes presented as fact.</p>
+            <span class="card-link">Inspect the evidence →</span>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container container--wide fade-in">
+        <p class="section-label">Levels of ownership</p>
+        <h2>How open is the light?</h2>
+        <p>“Working” is not a single state. Each layer earns its own confidence level.</p>
+        <div class="assessment-grid">
+          <article class="level-card"><div class="level-head"><span class="level-number">Level 01</span><span class="level-score">95%</span></div><h3>Local power</h3><p>Both lights repeatedly respond together or individually over the recovered Mesh control path.</p><div class="meter"><span style="--score:95%"></span></div></article>
+          <article class="level-card"><div class="level-head"><span class="level-number">Level 02</span><span class="level-score">88%</span></div><h3>White light</h3><p>Brightness, Kelvin, presets, timestamps, and combined temperature-plus-brightness are decoded and tested.</p><div class="meter"><span style="--score:88%"></span></div></article>
+          <article class="level-card"><div class="level-head"><span class="level-number">Level 03</span><span class="level-score">76%</span></div><h3>Color</h3><p>RGB transmission and mode selection are understood; incoming state and device gamut remain incomplete.</p><div class="meter"><span style="--score:76%"></span></div></article>
+          <article class="level-card"><div class="level-head"><span class="level-number">Level 04</span><span class="level-score">58%</span></div><h3>Automations</h3><p>The full schedule schema is mapped, but public editing remains gated on careful compatibility validation.</p><div class="meter"><span style="--score:58%"></span></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container container--wide fade-in">
+        <p class="section-label">Method</p>
+        <h2>Evidence before convenience.</h2>
+        <div class="method-list">
+          <article class="method"><h3>Observe</h3><p>Use the official app and record what a real control does, including timing and transport behavior.</p></article>
+          <article class="method"><h3>Trace</h3><p>Follow the client from UI intent through its native bridge, command serializer, and network layer.</p></article>
+          <article class="method"><h3>Correlate</h3><p>Compare static code, protected account state, and live device response. Redact private identifiers.</p></article>
+          <article class="method"><h3>Reproduce</h3><p>Expose only the smallest safe command surface, then preserve known payloads with regression tests.</p></article>
+        </div>
+        <div class="callout callout--cyan"><div class="callout-title">Compatibility principle</div><p>Keep the official Oasis app useful. The bridge does not reset devices, replace room membership, or claim authority over schedule data it cannot safely round-trip.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div><strong>Oasis Lights</strong><br><a href="https://github.com/malpern/oasis-lights-mac">Source and releases ↗</a></div>
+    <div>Unofficial and not affiliated with Oasis. Product names and official photography belong to their respective owners. Research is published for interoperability. <a href="https://heyoasis.com/en/shop/ambients">Official Oasis site ↗</a></div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<?xml version="1.0" standalone="yes"?>
+<!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Oasis Lights</title>
+        <item>
+            <title>0.5.0</title>
+            <pubDate>Mon, 03 Aug 2026 21:24:12 -0700</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/malpern/oasis-lights-mac/releases/download/v0.5.0/Oasis-Lights-0.5.0.zip" length="5025067" type="application/octet-stream" sparkle:edSignature="T6AA4l8Mb9Rd4brJ6sLbqFGVEGrij93qnUor2V3FlA1fk5Kre0iUsTzoIOPU0bp004he0iLnnBTcIl9bVb1WBw=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: ToE0tLZmrwDONRXSp4HoouED81uaTD5czRulrb2MfcNopVtH3NIszAPnQO0NdFxcl0G3tmZIEALLUYFIfSBRBw==
+length: 1127
+-->

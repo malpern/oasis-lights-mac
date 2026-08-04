@@ -1,0 +1,30 @@
+# Build products and resolved binary dependencies
+.build/
+Build/
+Dist/
+tmp/
+.DS_Store
+site/assets/oasis-lights-hero.png
+site/assets/oasis-lights-hero.webp
+site/assets/oasis-lights-icon.png
+
+# Private device and account material
+*.private.json
+*.credentials.json
+*.token
+*.mobileconfig
+Research/private/
+
+# Vendor binaries, extracted applications, and reverse-engineering toolchains
+Research/android-2.7.0/
+Research/tools/
+*.apk
+*.aab
+*.xapk
+*.ipa
+*.dylib
+*.so
+
+# Local editor state
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+*.xcuserstate

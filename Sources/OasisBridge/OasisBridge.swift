@@ -333,6 +333,9 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var lastError: String?
     private var handshakeWatchdog: DispatchWorkItem?
     private var retryDelay = OasisBridge.minimumRetryDelay
+    private var emptyScanCycles = 0
+    private var isSurveying = false
+    private var loggedCandidates: Set<String> = []
 
     // A proxy that answers the advertisement but never completes the GATT
     // handshake used to wedge the bridge forever. Every path that leaves the
@@ -341,6 +344,7 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private static let minimumRetryDelay: TimeInterval = 1
     private static let maximumRetryDelay: TimeInterval = 30
     private static let scanSupervisorInterval: TimeInterval = 30
+    private static let surveyDuration: TimeInterval = 5
 
     override init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -432,12 +436,45 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private func startScanSupervisor() {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.scanSupervisorInterval) { [weak self] in
             guard let self else { return }
-            if !isReady, peripheral == nil, central?.state == .poweredOn {
-                log("scan_restart reason=no_proxy_seen")
-                central.stopScan()
-                scan()
+            if !isReady, peripheral == nil, central?.state == .poweredOn, !isSurveying {
+                emptyScanCycles += 1
+                // A line every 32s buried the interesting history last time;
+                // report the first few, then only occasionally.
+                if emptyScanCycles <= 3 || emptyScanCycles % 10 == 0 {
+                    log("scan_restart reason=no_proxy_seen cycles=\(emptyScanCycles)")
+                }
+                loggedCandidates.removeAll()
+                if emptyScanCycles % 3 == 0 {
+                    startSurvey()
+                } else {
+                    central.stopScan()
+                    scan()
+                }
             }
             startScanSupervisor()
+        }
+    }
+
+    /// The filtered scan cannot tell "no light is powered" apart from "a light
+    /// is on the air under a name we do not recognise". Periodically, while
+    /// nothing has been found, look at everything nearby and write down what
+    /// is actually there. Survey passes only observe — connecting to a device
+    /// that is not advertising the mesh proxy service is how the empty-service
+    /// handshake failure happens.
+    private func startSurvey() {
+        guard !isSurveying else { return }
+        isSurveying = true
+        loggedCandidates.removeAll()
+        central.stopScan()
+        central.scanForPeripherals(withServices: nil)
+        log("survey_started missing_for=\(Int(Double(emptyScanCycles) * Self.scanSupervisorInterval))s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.surveyDuration) { [weak self] in
+            guard let self else { return }
+            isSurveying = false
+            central.stopScan()
+            log("survey_finished devices=\(loggedCandidates.count)")
+            loggedCandidates.removeAll()
+            scan()
         }
     }
 
@@ -503,32 +540,16 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         if fields.count == 3, fields[0] == "POWER",
            let destination = parseAddress(String(fields[1])),
            let onValue = Int(fields[2]), onValue == 0 || onValue == 1 {
-            do {
+            perform("POWER dest=\(destination) on=\(onValue == 1)", connection) {
                 try sendPower(destination: destination, isOn: onValue == 1)
-                reply(connection, "OK\n")
-            } catch {
-                lastError = error.localizedDescription
-                if case BridgeError.bluetoothNotReady = error {
-                    reply(connection, "ERR bluetooth_not_ready\n")
-                } else {
-                    reply(connection, "ERR command_failed\n")
-                }
             }
             return
         }
         if fields.count == 3, fields[0] == "BRIGHTNESS",
            let destination = parseAddress(String(fields[1])),
            let brightness = UInt8(fields[2]), brightness <= 100 {
-            do {
+            perform("BRIGHTNESS dest=\(destination) percent=\(brightness)", connection) {
                 try sendBrightness(destination: destination, brightness: brightness)
-                reply(connection, "OK\n")
-            } catch {
-                lastError = error.localizedDescription
-                if case BridgeError.bluetoothNotReady = error {
-                    reply(connection, "ERR bluetooth_not_ready\n")
-                } else {
-                    reply(connection, "ERR command_failed\n")
-                }
             }
             return
         }
@@ -536,20 +557,12 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
            let destination = parseAddress(String(fields[1])),
            let temperature = UInt16(fields[2]), (2000...6500).contains(temperature),
            let brightness = UInt8(fields[3]), brightness <= 100 {
-            do {
+            perform("CCTB dest=\(destination) kelvin=\(temperature) percent=\(brightness)", connection) {
                 try sendColorTemperature(
                     destination: destination,
                     temperature: temperature,
                     brightness: brightness
                 )
-                reply(connection, "OK\n")
-            } catch {
-                lastError = error.localizedDescription
-                if case BridgeError.bluetoothNotReady = error {
-                    reply(connection, "ERR bluetooth_not_ready\n")
-                } else {
-                    reply(connection, "ERR command_failed\n")
-                }
             }
             return
         }
@@ -558,21 +571,8 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
            let red = UInt8(fields[2]),
            let green = UInt8(fields[3]),
            let blue = UInt8(fields[4]) {
-            do {
-                try sendColor(
-                    destination: destination,
-                    red: red,
-                    green: green,
-                    blue: blue
-                )
-                reply(connection, "OK\n")
-            } catch {
-                lastError = error.localizedDescription
-                if case BridgeError.bluetoothNotReady = error {
-                    reply(connection, "ERR bluetooth_not_ready\n")
-                } else {
-                    reply(connection, "ERR command_failed\n")
-                }
+            perform("COLOR dest=\(destination) rgb=\(red),\(green),\(blue)", connection) {
+                try sendColor(destination: destination, red: red, green: green, blue: blue)
             }
             return
         }
@@ -683,6 +683,30 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sequencePath.path)
     }
 
+    /// Every light command routes through here so the log records what was
+    /// asked for and what became of it — a command that never reaches a light
+    /// used to leave no trace beyond an advancing sequence number.
+    private func perform(
+        _ summary: String,
+        _ connection: NWConnection,
+        _ work: () throws -> Void
+    ) {
+        do {
+            try work()
+            log("command \(summary) result=ok proxy=\(connectedProxy ?? "none")")
+            reply(connection, "OK\n")
+        } catch {
+            lastError = error.localizedDescription
+            if case BridgeError.bluetoothNotReady = error {
+                log("command \(summary) result=bluetooth_not_ready")
+                reply(connection, "ERR bluetooth_not_ready\n")
+            } else {
+                log("command \(summary) result=failed error=\(error.localizedDescription)")
+                reply(connection, "ERR command_failed\n")
+            }
+        }
+    }
+
     private func reply(_ connection: NWConnection, _ response: String) {
         connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
             connection.cancel()
@@ -730,9 +754,24 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         rssi RSSI: NSNumber
     ) {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? ""
+        let label = name.isEmpty ? "<unnamed \(peripheral.identifier.uuidString.prefix(8))>" : name
+        if isSurveying {
+            if loggedCandidates.insert(label).inserted {
+                log("survey_device name=\(label) rssi=\(RSSI)")
+            }
+            return
+        }
+        guard self.peripheral == nil else { return }
         // Oasis Mesh proxies use the OASIS_ prefix. Avoid baking one home's
         // private proxy identifiers into the bridge or its distributable app.
-        guard name.hasPrefix("OASIS_"), self.peripheral == nil else { return }
+        guard name.hasPrefix("OASIS_") else {
+            // Advertising the mesh proxy service but not recognisable as ours.
+            if loggedCandidates.insert(label).inserted {
+                log("candidate_ignored name=\(label) rssi=\(RSSI) reason=name_prefix")
+            }
+            return
+        }
+        emptyScanCycles = 0
         self.peripheral = peripheral
         connectedProxy = name
         peripheral.delegate = self

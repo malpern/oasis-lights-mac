@@ -29,6 +29,22 @@ private enum LightAppearancePreset: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Warmth is the choice people make most often, so it is offered directly
+    /// in the main window; saturated colours stay behind the picker.
+    static var warmths: [LightAppearancePreset] {
+        allCases.filter { preset in
+            if case .temperature = preset.command { return true }
+            return false
+        }
+    }
+
+    var description: LocalizedStringResource {
+        switch command {
+        case let .temperature(kelvin): "\(kelvin)K white"
+        case let .color(red, green, blue): "Colour \(red), \(green), \(blue)"
+        }
+    }
+
     var title: LocalizedStringResource {
         switch self {
         case .bright: "Bright"
@@ -72,7 +88,57 @@ private enum LightAppearancePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// Custom colours the user has mixed, newest first, persisted as hex strings.
+private enum CustomSwatches {
+    static let limit = 5
+
+    static func decode(_ raw: String) -> [String] {
+        (try? JSONDecoder().decode([String].self, from: Data(raw.utf8))) ?? []
+    }
+
+    static func encode(_ values: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(values) else { return "[]" }
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    /// Newest first, no duplicates, oldest dropped past the limit.
+    static func adding(_ hex: String, to raw: String) -> String {
+        var values = decode(raw).filter { $0.caseInsensitiveCompare(hex) != .orderedSame }
+        values.insert(hex, at: 0)
+        return encode(Array(values.prefix(limit)))
+    }
+
+    static func removing(_ hex: String, from raw: String) -> String {
+        encode(decode(raw).filter { $0.caseInsensitiveCompare(hex) != .orderedSame })
+    }
+
+    static func rgb(for hex: String) -> (red: UInt8, green: UInt8, blue: UInt8)? {
+        var value = hex
+        if value.hasPrefix("#") { value.removeFirst() }
+        guard value.count == 6, let number = UInt32(value, radix: 16) else { return nil }
+        return (
+            UInt8((number >> 16) & 0xFF),
+            UInt8((number >> 8) & 0xFF),
+            UInt8(number & 0xFF)
+        )
+    }
+
+    static func color(for hex: String) -> Color {
+        guard let rgb = rgb(for: hex) else { return .gray }
+        return Color(
+            red: Double(rgb.red) / 255,
+            green: Double(rgb.green) / 255,
+            blue: Double(rgb.blue) / 255
+        )
+    }
+}
+
 private extension NSColor {
+    var oasisHex: String? {
+        guard let rgb = oasisRGB else { return nil }
+        return String(format: "#%02X%02X%02X", rgb.red, rgb.green, rgb.blue)
+    }
+
     var oasisRGB: (red: UInt8, green: UInt8, blue: UInt8)? {
         guard let color = usingColorSpace(.sRGB) else { return nil }
         return (
@@ -307,6 +373,37 @@ private final class ControllerModel {
         }
     }
 
+    enum PairState {
+        case allOn
+        case allOff
+        case mixed
+        case unknown
+
+        var summary: LocalizedStringResource {
+            switch self {
+            case .allOn: "Both on"
+            case .allOff: "Both off"
+            case .mixed: "One on, one off"
+            case .unknown: "State unknown"
+            }
+        }
+    }
+
+    /// A group command is recorded against the group address, so fall back to
+    /// it when an individual light has not been addressed directly.
+    var pairState: PairState {
+        guard let details else { return .unknown }
+        let group = details.lastCommand(for: LightAddress.group)
+        let first = details.lastCommand(for: LightAddress.first) ?? group
+        let second = details.lastCommand(for: LightAddress.second) ?? group
+        switch (first, second) {
+        case (true, true): return .allOn
+        case (false, false): return .allOff
+        case (nil, nil): return .unknown
+        default: return .mixed
+        }
+    }
+
     func toggle(_ destination: UInt16) {
         let current: Bool?
         if destination == LightAddress.group {
@@ -361,9 +458,11 @@ private struct OasisControllerApp: App {
     var body: some Scene {
         WindowGroup("Oasis Lights") {
             MainControlView(model: model)
-                .frame(minWidth: 500, minHeight: 420)
+                .frame(width: 620)
         }
-        .defaultSize(width: 560, height: 500)
+        // Let the window follow the disclosure instead of leaving dead space
+        // below the footer when the individual controls are collapsed.
+        .windowResizability(.contentSize)
         .commands {
             LightCommands(model: model)
             UpdateCommands(updates: updates)
@@ -389,45 +488,65 @@ private struct MainControlView: View {
     @AppStorage("secondLightName") private var secondLightName = "Oasis Light 2"
     @AppStorage("firstLightBrightness") private var firstLightBrightness = 100.0
     @AppStorage("secondLightBrightness") private var secondLightBrightness = 100.0
+    @AppStorage("showIndividualLights") private var showIndividualLights = false
+
+    private var isEnabled: Bool { model.isReady && !model.commandInFlight }
+
+    /// Derived rather than stored: a third copy of "how bright" would sit at
+    /// its default while the per-light sliders held real values, and the card
+    /// would contradict the rows below it.
+    private var pairBrightness: Binding<Double> {
+        Binding(
+            get: { (firstLightBrightness + secondLightBrightness) / 2 },
+            set: { value in
+                firstLightBrightness = value
+                secondLightBrightness = value
+            }
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             ControlHeader(
                 statusTitle: model.statusTitle,
                 statusSystemImage: model.statusSystemImage,
                 statusColor: model.statusColor,
                 detail: model.statusDetail
             )
-            LightControlsSection(
+            PairControlCard(
+                state: model.pairState,
+                brightness: pairBrightness,
+                isEnabled: isEnabled,
+                setPower: { model.sendPower(to: LightAddress.group, isOn: $0) },
+                setBrightness: { model.sendBrightness(to: LightAddress.group, percent: $0) },
+                setTemperature: { kelvin in
+                    model.sendColorTemperature(
+                        to: LightAddress.group,
+                        kelvin: kelvin,
+                        brightness: Int(pairBrightness.wrappedValue.rounded())
+                    )
+                },
+                setColor: { model.sendColor(to: LightAddress.group, red: $0, green: $1, blue: $2) }
+            )
+            IndividualLightsDisclosure(
+                isExpanded: $showIndividualLights,
                 firstName: firstLightName,
                 firstState: model.details?.lastCommand(for: LightAddress.first),
                 secondName: secondLightName,
                 secondState: model.details?.lastCommand(for: LightAddress.second),
                 firstBrightness: $firstLightBrightness,
                 secondBrightness: $secondLightBrightness,
-                isEnabled: model.isReady && !model.commandInFlight,
+                isEnabled: isEnabled,
                 sendPower: model.sendPower,
                 sendBrightness: model.sendBrightness,
                 sendColorTemperature: model.sendColorTemperature,
                 sendColor: model.sendColor
             )
-            GroupControlsSection(
-                isEnabled: model.isReady && !model.commandInFlight,
-                brightness: Int(((firstLightBrightness + secondLightBrightness) / 2).rounded()),
-                sendPower: { isOn in model.sendPower(to: LightAddress.group, isOn: isOn) },
-                setTemperature: {
-                    model.sendColorTemperature(
-                        to: LightAddress.group,
-                        kelvin: $0,
-                        brightness: Int(((firstLightBrightness + secondLightBrightness) / 2).rounded())
-                    )
-                },
-                setColor: { model.sendColor(to: LightAddress.group, red: $0, green: $1, blue: $2) }
-            )
             Spacer(minLength: 0)
             ControlFooter()
         }
         .padding(28)
+        .animation(.snappy(duration: 0.22), value: showIndividualLights)
         .task { model.beginPolling() }
         .alert("Oasis command failed", isPresented: Binding(
             get: { model.presentedError != nil },
@@ -438,6 +557,7 @@ private struct MainControlView: View {
             Text(model.presentedError ?? "Unknown error")
         }
     }
+
 }
 
 private struct ControlHeader: View {
@@ -472,7 +592,207 @@ private struct ControlHeader: View {
     }
 }
 
-private struct LightControlsSection: View {
+/// The pair is what people actually manage; both lights live in the same room
+/// and are almost always set together.
+private struct PairControlCard: View {
+    let state: ControllerModel.PairState
+    @Binding var brightness: Double
+    let isEnabled: Bool
+    let setPower: (Bool) -> Void
+    let setBrightness: (Int) -> Void
+    let setTemperature: (Int) -> Void
+    let setColor: (UInt8, UInt8, UInt8) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 16) {
+                Image(systemName: state == .allOn ? "lightbulb.2.fill" : "lightbulb.2")
+                    .font(.system(size: 28))
+                    .foregroundStyle(state == .allOn ? .yellow : .secondary)
+                    .frame(width: 38)
+                    .help(state == .mixed ? "The two lights disagree" : "Both lights")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Both lights")
+                        .font(.title2.weight(.semibold))
+                    Text(state.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("Both lights", isOn: Binding(
+                    get: { state == .allOn },
+                    set: setPower
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.large)
+                .disabled(!isEnabled)
+                .help("Turn both lights on or off with one command")
+                .accessibilityIdentifier("bothLights.toggle")
+            }
+            HStack(spacing: 12) {
+                Image(systemName: "sun.max.fill")
+                    .foregroundStyle(.secondary)
+                Slider(value: $brightness, in: 1 ... 100, step: 1) { editing in
+                    if !editing { setBrightness(Int(brightness.rounded())) }
+                }
+                .accessibilityIdentifier("bothLights.brightness")
+                .help("Brightness for both lights")
+                Text("\(Int(brightness.rounded()))%")
+                    .font(.body.monospacedDigit())
+                    .frame(width: 44, alignment: .trailing)
+            }
+            .disabled(!isEnabled)
+            WarmthRow(
+                brightness: Int(brightness.rounded()),
+                isEnabled: isEnabled,
+                setTemperature: setTemperature,
+                setColor: setColor
+            )
+        }
+        .padding(20)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+/// Warmth presets sit in the main window instead of behind the picker — they
+/// are the second thing anyone changes after on/off.
+private struct WarmthRow: View {
+    let brightness: Int
+    let isEnabled: Bool
+    let setTemperature: (Int) -> Void
+    let setColor: (UInt8, UInt8, UInt8) -> Void
+    @AppStorage("customColorSwatches") private var storedSwatches = "[]"
+    @State private var isPickingColor = false
+    @State private var draftColor = Color(red: 0.20, green: 0.48, blue: 1.00)
+
+    private var swatches: [String] { CustomSwatches.decode(storedSwatches) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Warmth & colour")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                ForEach(LightAppearancePreset.warmths) { preset in
+                    SwatchButton(
+                        fill: preset.swatch,
+                        title: preset.title,
+                        tooltip: preset.description,
+                        identifier: "bothLights.warmth.\(preset.rawValue)",
+                        select: { selectPreset(preset) }
+                    )
+                }
+                ForEach(swatches, id: \.self) { hex in
+                    SwatchButton(
+                        fill: CustomSwatches.color(for: hex),
+                        title: "",
+                        tooltip: "\(hex) — right-click to remove",
+                        identifier: "bothLights.custom.\(hex)",
+                        select: { apply(hex: hex) }
+                    )
+                    .contextMenu {
+                        Button("Remove Colour", role: .destructive) {
+                            storedSwatches = CustomSwatches.removing(hex, from: storedSwatches)
+                        }
+                    }
+                }
+                AddSwatchButton(isPresented: $isPickingColor)
+                    .popover(isPresented: $isPickingColor, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Custom colour")
+                                .font(.headline)
+                            ColorPicker("Pick a colour", selection: $draftColor, supportsOpacity: false)
+                                .accessibilityIdentifier("bothLights.customColor")
+                            Button("Use & Remember") { rememberDraft() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("bothLights.rememberColor")
+                        }
+                        .padding(18)
+                        .frame(width: 260)
+                    }
+                Spacer()
+            }
+        }
+        .disabled(!isEnabled)
+    }
+
+    private func selectPreset(_ preset: LightAppearancePreset) {
+        switch preset.command {
+        case let .temperature(kelvin): setTemperature(kelvin)
+        case let .color(red, green, blue): setColor(red, green, blue)
+        }
+    }
+
+    private func apply(hex: String) {
+        guard let rgb = CustomSwatches.rgb(for: hex) else { return }
+        setColor(rgb.red, rgb.green, rgb.blue)
+    }
+
+    private func rememberDraft() {
+        guard let hex = NSColor(draftColor).oasisHex else { return }
+        storedSwatches = CustomSwatches.adding(hex, to: storedSwatches)
+        apply(hex: hex)
+        isPickingColor = false
+    }
+}
+
+private struct AddSwatchButton: View {
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            VStack(spacing: 5) {
+                ZStack {
+                    Circle()
+                        .strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 30, height: 30)
+                Text("Add")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Mix a colour and keep it as a swatch")
+        .accessibilityIdentifier("bothLights.addColor")
+    }
+}
+
+private struct SwatchButton: View {
+    let fill: Color
+    let title: LocalizedStringResource
+    let tooltip: LocalizedStringResource
+    let identifier: String
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            VStack(spacing: 5) {
+                Circle()
+                    .fill(fill)
+                    .frame(width: 30, height: 30)
+                    .overlay { Circle().stroke(.white.opacity(0.38), lineWidth: 1) }
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct IndividualLightsDisclosure: View {
+    @Binding var isExpanded: Bool
     let firstName: String
     let firstState: Bool?
     let secondName: String
@@ -486,6 +806,17 @@ private struct LightControlsSection: View {
     let sendColor: (UInt16, UInt8, UInt8, UInt8) -> Void
 
     var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            lightRows.padding(.top, 12)
+        } label: {
+            Label("Adjust each light", systemImage: "slider.horizontal.3")
+                .font(.headline)
+                .help("Control the two lights separately")
+                .accessibilityIdentifier("individualLights.disclosure")
+        }
+    }
+
+    private var lightRows: some View {
         VStack(spacing: 12) {
             LightControlRow(
                 name: firstName,
@@ -538,31 +869,33 @@ private struct LightControlRow: View {
                     .font(.title2)
                     .foregroundStyle(lastCommand == true ? .yellow : .secondary)
                     .frame(width: 32)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(.headline)
-                    Text(identifier)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
+                // The device id is reference material, not something to read at
+                // a glance; it stays available on hover.
+                Text(name)
+                    .font(.headline)
+                    .help("\(name) · \(identifier)")
                 Spacer()
-                Text(lastCommand.map { $0 ? "Last: On" : "Last: Off" } ?? "State unknown")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ControlButtonPair(
-                    isEnabled: isEnabled,
-                    turnOn: turnOn,
-                    turnOff: turnOff,
-                    accessibilityPrefix: identifier
-                )
+                Toggle(name, isOn: Binding(
+                    get: { lastCommand == true },
+                    set: { $0 ? turnOn() : turnOff() }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .disabled(!isEnabled)
+                .help(lastCommand == nil ? "State unknown — no command sent yet" : "Turn \(name) on or off")
+                .accessibilityIdentifier("\(identifier).toggle")
             }
             HStack(spacing: 12) {
-                Label("\(Int(brightness.rounded()))%", systemImage: "sun.max.fill")
-                    .frame(width: 64, alignment: .leading)
+                Image(systemName: "sun.max.fill")
+                    .foregroundStyle(.secondary)
                 Slider(value: $brightness, in: 1 ... 100, step: 1) { editing in
                     if !editing { setBrightness(Int(brightness.rounded())) }
                 }
                 .accessibilityIdentifier("\(identifier).brightness")
+                .help("Brightness for \(name)")
+                Text("\(Int(brightness.rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 40, alignment: .trailing)
                 AppearancePickerButton(
                     title: name,
                     brightness: Int(brightness.rounded()),
@@ -748,60 +1081,6 @@ private struct CustomColorSection: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("\(accessibilityPrefix).applyCustomColor")
         }
-    }
-}
-
-private struct ControlButtonPair: View {
-    let isEnabled: Bool
-    let turnOn: () -> Void
-    let turnOff: () -> Void
-    let accessibilityPrefix: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button("On", action: turnOn)
-                .accessibilityIdentifier("\(accessibilityPrefix).on")
-            Button("Off", action: turnOff)
-                .accessibilityIdentifier("\(accessibilityPrefix).off")
-        }
-        .buttonStyle(.bordered)
-        .disabled(!isEnabled)
-    }
-}
-
-private struct GroupControlsSection: View {
-    let isEnabled: Bool
-    let brightness: Int
-    let sendPower: (Bool) -> Void
-    let setTemperature: (Int) -> Void
-    let setColor: (UInt8, UInt8, UInt8) -> Void
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Both lights")
-                    .font(.headline)
-                Text("Sends one synchronized group command")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            AppearancePickerButton(
-                title: "Both lights",
-                brightness: brightness,
-                isEnabled: isEnabled,
-                accessibilityPrefix: "bothLights",
-                setTemperature: setTemperature,
-                setColor: setColor
-            )
-            ControlButtonPair(
-                isEnabled: isEnabled,
-                turnOn: { sendPower(true) },
-                turnOff: { sendPower(false) },
-                accessibilityPrefix: "bothLights"
-            )
-        }
-        .padding(.horizontal, 4)
     }
 }
 

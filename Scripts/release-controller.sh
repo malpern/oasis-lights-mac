@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-export DEVELOPER_DIR="${OASIS_DEVELOPER_DIR:-/Applications/Xcode-26.6.0.app/Contents/Developer}"
+export DEVELOPER_DIR="${OASIS_DEVELOPER_DIR:-/Applications/Xcode-26.6.app/Contents/Developer}"
 updates_dir="${OASIS_UPDATES_DIR:-$project_root/Dist/updates}"
 notary_dir="${OASIS_NOTARY_DIR:-$project_root/Dist/notarization}"
 sparkle_account="${OASIS_SPARKLE_ACCOUNT:-oasis-lights}"

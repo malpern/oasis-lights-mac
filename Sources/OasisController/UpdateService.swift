@@ -58,3 +58,10 @@ final class UpdateService {
         automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
     }
 }
+
+extension Bundle {
+    /// Read from the bundle so the About panel cannot drift from Info.plist.
+    var shortVersion: String {
+        infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    }
+}

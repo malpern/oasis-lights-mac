@@ -918,7 +918,9 @@ if CommandLine.arguments.contains("--crypto-self-test") {
     }
     print("crypto_self_test_ok")
 } else if CommandLine.arguments.contains("--about") {
-    print("Oasis Bridge 0.5.0 — headless service")
+    // Read from the bundle so this cannot drift from Info.plist on a release.
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    print("Oasis Bridge \(version) — headless service")
 } else {
     let application = NSApplication.shared
     let isAuthorizing = CommandLine.arguments.contains("--authorize")

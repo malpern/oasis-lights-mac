@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-export DEVELOPER_DIR="${OASIS_DEVELOPER_DIR:-/Applications/Xcode-26.6.0.app/Contents/Developer}"
+export DEVELOPER_DIR="${OASIS_DEVELOPER_DIR:-/Applications/Xcode-26.6.app/Contents/Developer}"
 signing_identity="${OASIS_SIGNING_IDENTITY:-Developer ID Application: Micah Alpern (X2RKZ5TG99)}"
 build_root="$project_root/Build"
 applications_root="$build_root/Applications"

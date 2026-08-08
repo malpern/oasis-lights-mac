@@ -41,7 +41,19 @@ fi
 mv "$stage/Oasis Bridge.app" "$current_app"
 cp /tmp/com.malpern.oasis-bridge.plist "$agent_plist"
 bridge_executable="$current_app/Contents/MacOS/OasisBridge"
-bridge_log="$HOME/Library/Logs/OasisBridge.log"
+# The controller often runs in a different account than the bridge, and a home
+# directory is not readable across accounts, so a log under $HOME cannot be
+# opened by the app that offers to show it. Keep it where both can reach it.
+bridge_log_directory="/Users/Shared/OasisBridge"
+bridge_log="$bridge_log_directory/OasisBridge.log"
+mkdir -p "$bridge_log_directory"
+chmod 755 "$bridge_log_directory"
+legacy_log="$HOME/Library/Logs/OasisBridge.log"
+if [[ -f "$legacy_log" && ! -f "$bridge_log" ]]; then
+  mv "$legacy_log" "$bridge_log"
+fi
+touch "$bridge_log"
+chmod 644 "$bridge_log"
 /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $bridge_executable" "$agent_plist"
 /usr/libexec/PlistBuddy -c "Set :StandardOutPath $bridge_log" "$agent_plist"
 /usr/libexec/PlistBuddy -c "Set :StandardErrorPath $bridge_log" "$agent_plist"

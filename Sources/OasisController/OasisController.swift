@@ -333,8 +333,14 @@ private final class ControllerModel {
     }
 
     func revealLog() {
-        let log = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Logs/OasisBridge.log")
+        // The bridge may run in another account, whose home this process cannot
+        // read; the shared location is canonical. Fall back to our own home for
+        // installs that predate it.
+        let shared = URL(filePath: "/Users/Shared/OasisBridge/OasisBridge.log")
+        let log = FileManager.default.fileExists(atPath: shared.path)
+            ? shared
+            : FileManager.default.homeDirectoryForCurrentUser
+                .appending(path: "Library/Logs/OasisBridge.log")
         NSWorkspace.shared.activateFileViewerSelecting([log])
     }
 
@@ -944,7 +950,7 @@ private struct OasisLightsAboutView: View {
                     Text("Local control for two Oasis lights")
                         .font(.headline)
                         .foregroundStyle(.secondary)
-                    Text("Version 0.5.0 · Bluetooth Mesh stays on your network")
+                    Text("Version \(Bundle.main.shortVersion) · Bluetooth Mesh stays on your network")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

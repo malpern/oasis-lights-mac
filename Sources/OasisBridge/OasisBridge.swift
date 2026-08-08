@@ -331,6 +331,16 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var connectedProxy: String?
     private var lastCommands: [UInt16: Bool] = [:]
     private var lastError: String?
+    private var handshakeWatchdog: DispatchWorkItem?
+    private var retryDelay = OasisBridge.minimumRetryDelay
+
+    // A proxy that answers the advertisement but never completes the GATT
+    // handshake used to wedge the bridge forever. Every path that leaves the
+    // ready state now re-arms a watchdog and retries with backoff.
+    private static let handshakeTimeout: TimeInterval = 15
+    private static let minimumRetryDelay: TimeInterval = 1
+    private static let maximumRetryDelay: TimeInterval = 30
+    private static let scanSupervisorInterval: TimeInterval = 30
 
     override init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -364,8 +374,18 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         }
         super.init()
         startListener()
-        central = CBCentralManager(delegate: self, queue: .main)
     }
+
+    private func log(_ message: String) {
+        print("\(Self.timestampFormatter.string(from: Date())) \(message)")
+        fflush(stdout)
+    }
+
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        return formatter
+    }()
 
     private func startListener() {
         do {
@@ -373,10 +393,23 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
             let listener = try NWListener(using: parameters)
             listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-            listener.stateUpdateHandler = { state in
-                if case let .failed(error) = state {
+            listener.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    // Bluetooth only starts once this instance owns the port, so a
+                    // duplicate bridge can never take the radio away from the one
+                    // that is actually serving clients.
+                    self?.startBluetooth()
+                case let .failed(error):
                     fputs("listener_failed \(error)\n", stderr)
                     exit(2)
+                case let .waiting(error):
+                    // Loopback listeners only wait on address-in-use, which never
+                    // clears on its own; let launchd retry instead of idling here.
+                    fputs("listener_unavailable \(error)\n", stderr)
+                    exit(2)
+                default:
+                    break
                 }
             }
             listener.start(queue: .main)
@@ -384,6 +417,27 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         } catch {
             fputs("listener_setup_failed \(error)\n", stderr)
             exit(2)
+        }
+    }
+
+    private func startBluetooth() {
+        guard central == nil else { return }
+        log("listener_ready port=\(port.rawValue)")
+        central = CBCentralManager(delegate: self, queue: .main)
+        startScanSupervisor()
+    }
+
+    /// Recovers from a scan that stops delivering discoveries without any
+    /// delegate callback — restarting it is cheap and idempotent.
+    private func startScanSupervisor() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scanSupervisorInterval) { [weak self] in
+            guard let self else { return }
+            if !isReady, peripheral == nil, central?.state == .poweredOn {
+                log("scan_restart reason=no_proxy_seen")
+                central.stopScan()
+                scan()
+            }
+            startScanSupervisor()
         }
     }
 
@@ -638,8 +692,30 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         bluetoothState = central.state
         isReady = false
-        guard central.state == .poweredOn else { return }
+        log("bluetooth_state \(Self.describe(central.state))")
+        guard central.state == .poweredOn else {
+            // Radio went away (powered off, reset, or access revoked); drop the
+            // stale peripheral so recovery starts from a clean scan.
+            cancelHandshakeWatchdog()
+            dataIn = nil
+            dataOut = nil
+            peripheral = nil
+            connectedProxy = nil
+            lastError = "Bluetooth is \(Self.describe(central.state))"
+            return
+        }
         scan()
+    }
+
+    private static func describe(_ state: CBManagerState) -> String {
+        switch state {
+        case .poweredOn: "powered on"
+        case .poweredOff: "powered off"
+        case .unauthorized: "not authorized"
+        case .unsupported: "unsupported"
+        case .resetting: "resetting"
+        default: "unknown"
+        }
     }
 
     private func scan() {
@@ -661,24 +737,49 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         connectedProxy = name
         peripheral.delegate = self
         central.stopScan()
+        log("proxy_discovered name=\(name) rssi=\(RSSI)")
+        // connect(_:) has no timeout of its own, so the watchdog covers both a
+        // connection that never lands and a handshake that never finishes.
+        armHandshakeWatchdog()
         central.connect(peripheral)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        log("proxy_connected name=\(connectedProxy ?? "unknown")")
         peripheral.discoverServices([CBUUID(string: "1828")])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         lastError = error?.localizedDescription
+        log("proxy_connect_failed error=\(error?.localizedDescription ?? "none")")
         resetAndScan()
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         lastError = error?.localizedDescription
+        log("proxy_disconnected error=\(error?.localizedDescription ?? "none")")
         resetAndScan()
     }
 
+    private func armHandshakeWatchdog() {
+        cancelHandshakeWatchdog()
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self, !isReady else { return }
+            lastError = "Proxy handshake timed out after \(Int(Self.handshakeTimeout))s"
+            log("handshake_timeout name=\(connectedProxy ?? "unknown")")
+            resetAndScan(cancelCurrent: true)
+        }
+        handshakeWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handshakeTimeout, execute: watchdog)
+    }
+
+    private func cancelHandshakeWatchdog() {
+        handshakeWatchdog?.cancel()
+        handshakeWatchdog = nil
+    }
+
     private func resetAndScan(cancelCurrent: Bool = false) {
+        cancelHandshakeWatchdog()
         isReady = false
         dataIn = nil
         dataOut = nil
@@ -687,12 +788,25 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             central.cancelPeripheralConnection(peripheral)
         }
         peripheral = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.scan() }
+        let delay = retryDelay
+        retryDelay = min(Self.maximumRetryDelay, retryDelay * 2)
+        log("rescan_scheduled delay=\(Int(delay))s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.scan() }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else { return resetAndScan() }
-        for service in peripheral.services ?? [] {
+        guard error == nil else {
+            lastError = error?.localizedDescription
+            log("service_discovery_failed error=\(error?.localizedDescription ?? "none")")
+            return resetAndScan(cancelCurrent: true)
+        }
+        let services = peripheral.services ?? []
+        guard !services.isEmpty else {
+            lastError = "Proxy advertised the mesh service but exposed none"
+            log("service_discovery_empty name=\(connectedProxy ?? "unknown")")
+            return resetAndScan(cancelCurrent: true)
+        }
+        for service in services {
             peripheral.discoverCharacteristics([CBUUID(string: "2ADD"), CBUUID(string: "2ADE")], for: service)
         }
     }
@@ -702,15 +816,29 @@ final class OasisBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         didDiscoverCharacteristicsFor service: CBService,
         error: Error?
     ) {
-        guard error == nil else { return resetAndScan() }
-        dataIn = service.characteristics?.first { $0.uuid == CBUUID(string: "2ADD") }
-        dataOut = service.characteristics?.first { $0.uuid == CBUUID(string: "2ADE") }
-        if let dataOut { peripheral.setNotifyValue(true, for: dataOut) }
-        isReady = dataIn != nil
-        if isReady {
-            print("bridge_ready proxy=\(connectedProxy ?? "OASIS") port=\(port.rawValue)")
-            fflush(stdout)
+        guard error == nil else {
+            lastError = error?.localizedDescription
+            log("characteristic_discovery_failed error=\(error?.localizedDescription ?? "none")")
+            return resetAndScan(cancelCurrent: true)
         }
+        // This fires once per service. Only record a hit, never overwrite a
+        // characteristic already found on an earlier service with nil.
+        if let found = service.characteristics?.first(where: { $0.uuid == CBUUID(string: "2ADD") }) {
+            dataIn = found
+        }
+        if let found = service.characteristics?.first(where: { $0.uuid == CBUUID(string: "2ADE") }) {
+            dataOut = found
+            peripheral.setNotifyValue(true, for: found)
+        }
+        // Another service may still carry the write characteristic; if none
+        // does, the handshake watchdog tears the connection down and rescans.
+        guard dataIn != nil else { return }
+        cancelHandshakeWatchdog()
+        isReady = true
+        lastError = nil
+        retryDelay = Self.minimumRetryDelay
+        print("bridge_ready proxy=\(connectedProxy ?? "OASIS") port=\(port.rawValue)")
+        fflush(stdout)
     }
 
     private func writeProxyNetworkPDU(_ pdu: Data) throws {

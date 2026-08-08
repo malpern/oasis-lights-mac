@@ -169,22 +169,76 @@ private final class ControllerModel {
 
     var isReady: Bool { details?.ready == true }
 
+    /// "Waiting for Bluetooth" used to cover every not-ready condition, which
+    /// made an unreachable light look like a Bluetooth permission problem.
+    /// Each cause now reports itself.
+    enum BridgeStatus: Equatable {
+        case bridgeUnavailable
+        case bluetoothUnavailable(Int)
+        case searching
+        case connecting
+        case connected
+    }
+
+    var status: BridgeStatus {
+        guard let details else { return .bridgeUnavailable }
+        // CBManagerState.poweredOn
+        guard details.bluetoothState == 5 else {
+            return .bluetoothUnavailable(details.bluetoothState)
+        }
+        if details.ready { return .connected }
+        return details.proxy == nil ? .searching : .connecting
+    }
+
     var statusTitle: LocalizedStringResource {
-        if details?.ready == true { return "Connected" }
-        if details == nil { return "Bridge unavailable" }
-        return "Waiting for Bluetooth"
+        switch status {
+        case .bridgeUnavailable: "Bridge unavailable"
+        case let .bluetoothUnavailable(state): Self.bluetoothTitle(for: state)
+        case .searching: "No lights found"
+        case .connecting: "Connecting"
+        case .connected: "Connected"
+        }
+    }
+
+    private static func bluetoothTitle(for state: Int) -> LocalizedStringResource {
+        switch state {
+        // CBManagerState raw values
+        case 2: "Bluetooth unsupported"
+        case 3: "Bluetooth not authorized"
+        case 4: "Bluetooth turned off"
+        default: "Waiting for Bluetooth"
+        }
+    }
+
+    /// The proxy when there is one, otherwise why the bridge cannot reach it.
+    var statusDetail: String? {
+        switch status {
+        case .connected, .connecting: details?.proxy
+        // Deliberately not lastError: while searching, the absence of any proxy
+        // is the reason, and a stale error would read as the current cause.
+        case .searching: "No light is advertising in range"
+        case .bluetoothUnavailable: "Bridge cannot use the Bluetooth radio"
+        case .bridgeUnavailable: "Oasis Bridge is not running"
+        }
     }
 
     var statusSystemImage: String {
-        if details?.ready == true { return "checkmark.circle.fill" }
-        if details == nil { return "exclamationmark.triangle.fill" }
-        return "antenna.radiowaves.left.and.right.slash"
+        switch status {
+        case .bridgeUnavailable: "exclamationmark.triangle.fill"
+        case .bluetoothUnavailable: "antenna.radiowaves.left.and.right.slash"
+        case .searching: "magnifyingglass"
+        case .connecting: "antenna.radiowaves.left.and.right"
+        case .connected: "checkmark.circle.fill"
+        }
     }
 
     var statusColor: Color {
-        if details?.ready == true { return .green }
-        if details == nil { return .orange }
-        return .secondary
+        switch status {
+        case .bridgeUnavailable, .bluetoothUnavailable: .orange
+        case .searching: .secondary
+        case .connecting: .yellow
+        case .connected: .green
+        }
     }
 
     func beginPolling() {
@@ -336,7 +390,7 @@ private struct MainControlView: View {
                 statusTitle: model.statusTitle,
                 statusSystemImage: model.statusSystemImage,
                 statusColor: model.statusColor,
-                proxyName: model.details?.proxy
+                detail: model.statusDetail
             )
             LightControlsSection(
                 firstName: firstLightName,
@@ -384,7 +438,7 @@ private struct ControlHeader: View {
     let statusTitle: LocalizedStringResource
     let statusSystemImage: String
     let statusColor: Color
-    let proxyName: String?
+    let detail: String?
 
     var body: some View {
         HStack(alignment: .top) {
@@ -399,10 +453,13 @@ private struct ControlHeader: View {
                 Label(statusTitle, systemImage: statusSystemImage)
                     .foregroundStyle(statusColor)
                     .font(.headline)
-                if let proxyName {
-                    Text(proxyName)
+                if let detail {
+                    Text(detail)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .frame(maxWidth: 280, alignment: .trailing)
                 }
             }
         }
@@ -771,6 +828,7 @@ private struct BridgeSettingsView: View {
                         .foregroundStyle(model.statusColor)
                 }
                 LabeledContent("Connected proxy", value: model.details?.proxy ?? "None")
+                LabeledContent("Last Bluetooth error", value: model.details?.lastError ?? "None")
                 LabeledContent("Next Mesh sequence", value: model.details.map { String($0.nextSequence) } ?? "Unavailable")
                 HStack {
                     Button("Reconnect Bluetooth", action: model.reconnect)

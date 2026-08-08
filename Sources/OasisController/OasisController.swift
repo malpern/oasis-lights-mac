@@ -88,9 +88,55 @@ private enum LightAppearancePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// There are exactly two lights, so a preset can set them to different colours.
+/// The swatch is split on the diagonal to show that it is a pairing rather than
+/// one colour.
+private enum LightDuo: String, CaseIterable, Identifiable {
+    case twilight
+    case sunset
+    case ocean
+    case candy
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .twilight: "Twilight"
+        case .sunset: "Sunset"
+        case .ocean: "Ocean"
+        case .candy: "Candy"
+        }
+    }
+
+    var colors: (first: (UInt8, UInt8, UInt8), second: (UInt8, UInt8, UInt8)) {
+        switch self {
+        case .twilight: ((148, 64, 255), (26, 143, 255))
+        case .sunset: ((255, 56, 71), (255, 130, 20))
+        case .ocean: ((0, 190, 180), (26, 120, 255))
+        case .candy: ((255, 64, 160), (0, 200, 255))
+        }
+    }
+
+    var swatch: (first: Color, second: Color) {
+        (Self.color(colors.first), Self.color(colors.second))
+    }
+
+    var tooltip: LocalizedStringResource {
+        "First light \(swatchName(colors.first)), second light \(swatchName(colors.second))"
+    }
+
+    private func swatchName(_ rgb: (UInt8, UInt8, UInt8)) -> String {
+        String(format: "#%02X%02X%02X", rgb.0, rgb.1, rgb.2)
+    }
+
+    private static func color(_ rgb: (UInt8, UInt8, UInt8)) -> Color {
+        Color(red: Double(rgb.0) / 255, green: Double(rgb.1) / 255, blue: Double(rgb.2) / 255)
+    }
+}
+
 /// Custom colours the user has mixed, newest first, persisted as hex strings.
 private enum CustomSwatches {
-    static let limit = 5
+    static let limit = 8
 
     static func decode(_ raw: String) -> [String] {
         (try? JSONDecoder().decode([String].self, from: Data(raw.utf8))) ?? []
@@ -358,6 +404,32 @@ private final class ControllerModel {
         send("COLOR \(destination) \(red) \(green) \(blue)")
     }
 
+    /// Two commands, one in-flight guard held across both: sending them through
+    /// `send` separately would drop the second while the first was still out.
+    func sendDuo(
+        first: (UInt8, UInt8, UInt8),
+        second: (UInt8, UInt8, UInt8)
+    ) {
+        guard !commandInFlight else { return }
+        commandInFlight = true
+        Task {
+            defer { commandInFlight = false }
+            do {
+                for (destination, rgb) in [
+                    (LightAddress.first, first),
+                    (LightAddress.second, second),
+                ] {
+                    let command = "COLOR \(destination) \(rgb.0) \(rgb.1) \(rgb.2)"
+                    let response = try await BridgeClient.request(command)
+                    guard response == "OK" else { throw ControllerError.rejected(response) }
+                }
+                await refresh()
+            } catch {
+                presentedError = error.localizedDescription
+            }
+        }
+    }
+
     private func send(_ command: String) {
         guard !commandInFlight else { return }
         commandInFlight = true
@@ -526,7 +598,8 @@ private struct MainControlView: View {
                         brightness: Int(pairBrightness.wrappedValue.rounded())
                     )
                 },
-                setColor: { model.sendColor(to: LightAddress.group, red: $0, green: $1, blue: $2) }
+                setColor: { model.sendColor(to: LightAddress.group, red: $0, green: $1, blue: $2) },
+                setDuo: { model.sendDuo(first: $0, second: $1) }
             )
             IndividualLightsDisclosure(
                 isExpanded: $showIndividualLights,
@@ -602,6 +675,7 @@ private struct PairControlCard: View {
     let setBrightness: (Int) -> Void
     let setTemperature: (Int) -> Void
     let setColor: (UInt8, UInt8, UInt8) -> Void
+    let setDuo: ((UInt8, UInt8, UInt8), (UInt8, UInt8, UInt8)) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -647,7 +721,8 @@ private struct PairControlCard: View {
                 brightness: Int(brightness.rounded()),
                 isEnabled: isEnabled,
                 setTemperature: setTemperature,
-                setColor: setColor
+                setColor: setColor,
+                setDuo: setDuo
             )
         }
         .padding(20)
@@ -662,18 +737,23 @@ private struct WarmthRow: View {
     let isEnabled: Bool
     let setTemperature: (Int) -> Void
     let setColor: (UInt8, UInt8, UInt8) -> Void
+    let setDuo: ((UInt8, UInt8, UInt8), (UInt8, UInt8, UInt8)) -> Void
     @AppStorage("customColorSwatches") private var storedSwatches = "[]"
     @State private var isPickingColor = false
     @State private var draftColor = Color(red: 0.20, green: 0.48, blue: 1.00)
 
     private var swatches: [String] { CustomSwatches.decode(storedSwatches) }
 
+    /// A wrapping grid rather than a row: the number of swatches grows with
+    /// whatever the user saves, and a clipped swatch is worse than a second line.
+    private static let columns = [GridItem(.adaptive(minimum: 52), spacing: 8, alignment: .top)]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Warmth & colour")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            HStack(spacing: 10) {
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 12) {
                 ForEach(LightAppearancePreset.warmths) { preset in
                     SwatchButton(
                         fill: preset.swatch,
@@ -681,6 +761,16 @@ private struct WarmthRow: View {
                         tooltip: preset.description,
                         identifier: "bothLights.warmth.\(preset.rawValue)",
                         select: { selectPreset(preset) }
+                    )
+                }
+                ForEach(LightDuo.allCases) { duo in
+                    SwatchButton(
+                        fill: duo.swatch.first,
+                        secondFill: duo.swatch.second,
+                        title: duo.title,
+                        tooltip: duo.tooltip,
+                        identifier: "bothLights.duo.\(duo.rawValue)",
+                        select: { setDuo(duo.colors.first, duo.colors.second) }
                     )
                 }
                 ForEach(swatches, id: \.self) { hex in
@@ -711,7 +801,6 @@ private struct WarmthRow: View {
                         .padding(18)
                         .frame(width: 260)
                     }
-                Spacer()
             }
         }
         .disabled(!isEnabled)
@@ -767,6 +856,9 @@ private struct AddSwatchButton: View {
 
 private struct SwatchButton: View {
     let fill: Color
+    /// Set for a pairing: the swatch splits on the diagonal to show that the
+    /// two lights receive different colours.
+    var secondFill: Color?
     let title: LocalizedStringResource
     let tooltip: LocalizedStringResource
     let identifier: String
@@ -775,9 +867,9 @@ private struct SwatchButton: View {
     var body: some View {
         Button(action: select) {
             VStack(spacing: 5) {
-                Circle()
-                    .fill(fill)
+                swatch
                     .frame(width: 30, height: 30)
+                    .clipShape(Circle())
                     .overlay { Circle().stroke(.white.opacity(0.38), lineWidth: 1) }
                 Text(title)
                     .font(.caption2)
@@ -788,6 +880,23 @@ private struct SwatchButton: View {
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder private var swatch: some View {
+        if let secondFill {
+            // Hard stops at the midpoint give a crisp diagonal edge rather than
+            // a blend, so the two colours read as two lights.
+            LinearGradient(
+                stops: [
+                    .init(color: fill, location: 0.5),
+                    .init(color: secondFill, location: 0.5),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        } else {
+            fill
+        }
     }
 }
 
